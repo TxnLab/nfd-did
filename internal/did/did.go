@@ -43,6 +43,13 @@ type NFDProfileEndpoint struct {
 	Banner string `json:"banner,omitempty"`
 }
 
+// DIDURL represents a parsed DID URL with optional fragment and query parameters.
+type DIDURL struct {
+	DID      string            // The base DID (e.g., "did:nfd:name.algo")
+	Fragment string            // Fragment without '#' (e.g., "owner"), empty if none
+	Params   map[string]string // Query parameters (e.g., {"service": "web"})
+}
+
 // DID JSON-LD Contexts
 const (
 	ContextDIDv1   = "https://www.w3.org/ns/did/v1"

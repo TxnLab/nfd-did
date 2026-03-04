@@ -21,9 +21,10 @@ import (
 	"github.com/TxnLab/nfd-did/internal/nfd"
 )
 
-// NfdDIDResolver resolves did:nfd identifiers to DID Documents.
+// NfdDIDResolver resolves did:nfd identifiers to DID Documents and dereferences DID URLs.
 type NfdDIDResolver interface {
 	Resolve(ctx context.Context, did string) (*ResolutionResult, error)
+	Dereference(ctx context.Context, didURL string, contentType string) (*DereferencingResult, error)
 }
 
 type nfdDIDResolver struct {

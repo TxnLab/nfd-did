@@ -38,14 +38,15 @@ Three-layer design with an HTTP server on top:
 
 **`internal/nfd/`** — Blockchain data layer. `NfdFetcher` interface abstracts Algorand algod queries. `fetch.go` handles NFD lookup (registry box SHA256 hash → app ID → global state + box data), parallel fetching via `syncutil.WaitGroup`, and property extraction into the `Properties` struct (Internal/UserDefined/Verified maps). `misc.go` has NFD name validation.
 
-**`internal/did/`** — DID resolution layer. `NfdDIDResolver` interface (`resolver.go`) validates DID strings via regex, calls `NfdFetcher.FetchNfdDidVals`, and constructs W3C-compliant DID Documents. Key responsibilities:
+**`internal/did/`** — DID resolution and dereferencing layer. `NfdDIDResolver` interface (`resolver.go`) exposes `Resolve` (full DID Document) and `Dereference` (specific resource by fragment or `?service=` query). Validates DID strings via regex, calls `NfdFetcher.FetchNfdDidVals`, and constructs W3C-compliant DID Documents. Key responsibilities:
 - Cryptographic key pipeline (`keys.go`): Algorand address → Ed25519 public key → multibase (base58btc + multicodec prefix 0xed01), and Ed25519 → X25519 derivation (multicodec prefix 0xec01) for KeyAgreement
+- DID URL dereferencing (`dereference.go`): fragment resolution (`#owner`, `#web`, etc.), `?service=` endpoint extraction with `relativeRef` support
 - Auto-generating verification methods, services (web, profile, social media), and metadata
 - Detecting deactivation states (expired, for-sale, unowned, explicit `u.deactivated`)
 - Expirable LRU cache (50k entries, configurable TTL)
 
 **`cmd/did-resolver/`** — HTTP server (stdlib `net/http`) exposing:
-- `GET /1.0/identifiers/{did...}` — DID resolution (supports `application/did+json` and `application/did+ld+json`)
+- `GET /1.0/identifiers/{did...}` — DID resolution and dereferencing (supports `application/did+json` and `application/did+ld+json`; fragments via `%23`, service queries via `?service=`)
 - `GET /1.0/properties` — Method metadata
 - `GET /health` — Health check
 
@@ -55,7 +56,7 @@ Three-layer design with an HTTP server on top:
 - Verification method IDs: `#owner`, `#algo-0`..`#algo-N`, `#x25519-owner`
 - Public keys use multibase base58btc encoding with multicodec prefixes
 - Tests use `github.com/stretchr/testify` (assert/require)
-- The Dockerfile builds from a parent context (`COPY did ./`) — image is `ghcr.io/txnlab/did-nfd-resolver`
+- The Dockerfile copies `cmd/` and `internal/` directly — image is `ghcr.io/txnlab/did-nfd-resolver`
 
 ## Important Docs
 

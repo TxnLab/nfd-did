@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -93,6 +94,13 @@ func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 			return
 		}
 
+		// URL-decode the path value to handle %23 -> # (Universal Resolver encodes fragments in path)
+		decodedDID, err := url.PathUnescape(didStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid URL encoding")
+			return
+		}
+
 		// Determine content type from Accept header
 		contentType := did.ContentTypeDIDJSON
 		accept := r.Header.Get("Accept")
@@ -100,7 +108,29 @@ func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 			contentType = did.ContentTypeDIDLDJSON
 		}
 
-		result, err := resolver.Resolve(r.Context(), didStr)
+		// Check if this is a dereferencing request (fragment in path or ?service= query)
+		hasFragment := strings.Contains(decodedDID, "#")
+		serviceParam := r.URL.Query().Get("service")
+
+		if hasFragment || serviceParam != "" {
+			// Build the full DID URL string for the dereferencer
+			didURL := decodedDID
+			if serviceParam != "" {
+				// Strip any fragment from the path — ?service= takes precedence
+				if idx := strings.IndexByte(didURL, '#'); idx != -1 {
+					didURL = didURL[:idx]
+				}
+				didURL += "?service=" + url.QueryEscape(serviceParam)
+				if relRef := r.URL.Query().Get("relativeRef"); relRef != "" {
+					didURL += "&relativeRef=" + url.QueryEscape(relRef)
+				}
+			}
+			handleDereference(w, resolver, r, didURL, contentType, accept)
+			return
+		}
+
+		// Standard DID resolution
+		result, err := resolver.Resolve(r.Context(), decodedDID)
 		if err != nil {
 			if result != nil && result.ResolutionMetadata.Error != "" {
 				switch result.ResolutionMetadata.Error {
@@ -132,6 +162,49 @@ func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 		enc.SetIndent("", "  ")
 		enc.Encode(result)
 	}
+}
+
+func handleDereference(w http.ResponseWriter, resolver did.NfdDIDResolver, r *http.Request, didURL, contentType, accept string) {
+	result, err := resolver.Dereference(r.Context(), didURL, contentType)
+	if err != nil {
+		if result != nil && result.DereferencingMetadata.Error != "" {
+			switch result.DereferencingMetadata.Error {
+			case did.ErrorNotFound:
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(result)
+				return
+			case did.ErrorInvalidDID, did.ErrorInvalidDIDURL:
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(http.StatusBadRequest)
+				json.NewEncoder(w).Encode(result)
+				return
+			}
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// For ?service= with Accept: text/uri-list, return HTTP 303 redirect
+	if r.URL.Query().Get("service") != "" {
+		if endpointURL, ok := result.ContentStream.(string); ok {
+			if strings.Contains(accept, did.ContentTypeURIList) {
+				// Only redirect to http/https URLs to prevent open redirect abuse
+				parsed, err := url.Parse(endpointURL)
+				if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") {
+					w.Header().Set("Location", endpointURL)
+					w.WriteHeader(http.StatusSeeOther)
+					return
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", result.DereferencingMetadata.ContentType)
+	w.WriteHeader(http.StatusOK)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(result)
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {

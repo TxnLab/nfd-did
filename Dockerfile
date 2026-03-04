@@ -5,8 +5,9 @@ WORKDIR /
 RUN apk --no-cache add tzdata ca-certificates git
 COPY go.* ./
 RUN go mod download
-COPY did ./
-RUN --mount=type=cache,target=/root/.cache/go-build env GOOS=linux GOARCH=amd64 go build -v -tags=goexperiment.jsonv2 -o out/did-resolver -ldflags="-s -w" ./did/cmd/did-resolver
+COPY ./cmd ./cmd/
+COPY ./internal ./internal/
+RUN --mount=type=cache,target=/root/.cache/go-build env GOOS=linux GOARCH=amd64 go build -v -tags=goexperiment.jsonv2 -o out/did-resolver -ldflags="-s -w" ./cmd/did-resolver
 
 FROM scratch
 WORKDIR /app

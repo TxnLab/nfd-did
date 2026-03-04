@@ -31,16 +31,34 @@ type DocumentMetadata struct {
 	NFDAppID    uint64 `json:"nfdAppId,omitempty"`
 }
 
+// DereferencingResult contains the full DID URL dereferencing output per W3C DID Resolution spec.
+type DereferencingResult struct {
+	DereferencingMetadata DereferencingMetadata `json:"dereferencingMetadata"`
+	ContentStream         any                   `json:"contentStream"`
+	ContentMetadata       ContentMetadata       `json:"contentMetadata"`
+}
+
+// DereferencingMetadata contains metadata about the dereferencing process.
+type DereferencingMetadata struct {
+	ContentType string `json:"contentType"`
+	Error       string `json:"error,omitempty"`
+}
+
+// ContentMetadata contains metadata about the dereferenced content.
+type ContentMetadata struct{}
+
 // Content types for DID resolution.
 const (
 	ContentTypeDIDJSON   = "application/did+json"
 	ContentTypeDIDLDJSON = "application/did+ld+json"
+	ContentTypeURIList   = "text/uri-list"
 )
 
 // Standard DID resolution error codes per W3C spec.
 const (
 	ErrorNotFound      = "notFound"
 	ErrorInvalidDID    = "invalidDid"
+	ErrorInvalidDIDURL = "invalidDidUrl"
 	ErrorDeactivated   = "deactivated"
 	ErrorInternalError = "internalError"
 )
@@ -59,6 +77,16 @@ func ErrorResult(errorCode string, contentType string) *ResolutionResult {
 		ResolutionMetadata: ResolutionMetadata{
 			ContentType: contentType,
 			Retrieved:   time.Now().UTC().Format(time.RFC3339),
+			Error:       errorCode,
+		},
+	}
+}
+
+// DereferencingErrorResult returns a DereferencingResult containing only an error.
+func DereferencingErrorResult(errorCode string, contentType string) *DereferencingResult {
+	return &DereferencingResult{
+		DereferencingMetadata: DereferencingMetadata{
+			ContentType: contentType,
 			Error:       errorCode,
 		},
 	}

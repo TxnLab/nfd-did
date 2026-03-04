@@ -613,6 +613,82 @@ The `Accept` header is optional. Supported content types:
 }
 ```
 
+### GET /1.0/identifiers/{did-url} — DID URL Dereferencing
+
+Dereference a DID URL to retrieve a specific resource from the DID Document. This is triggered when the DID URL contains a fragment (`#`) or a `?service=` query parameter.
+
+#### Fragment Dereferencing
+
+Retrieve a specific verification method, key agreement, or service by its fragment identifier. Fragments must be percent-encoded as `%23` in the URL path.
+
+**Request:**
+```
+GET /1.0/identifiers/did:nfd:nfdomains.algo%23owner
+```
+
+**Response (200 OK):**
+```json
+{
+  "dereferencingMetadata": {
+    "contentType": "application/did+json"
+  },
+  "contentStream": {
+    "id": "did:nfd:nfdomains.algo#owner",
+    "type": "Ed25519VerificationKey2020",
+    "controller": "did:nfd:nfdomains.algo",
+    "publicKeyMultibase": "z6Mkf5rGMoatrSj1f4CyvuHBeXJELe9RPdzo2PKGNCKVtZxP"
+  },
+  "contentMetadata": {}
+}
+```
+
+**Response (404 Not Found) — fragment not found:**
+```json
+{
+  "dereferencingMetadata": {
+    "contentType": "application/did+json",
+    "error": "notFound"
+  },
+  "contentStream": null,
+  "contentMetadata": {}
+}
+```
+
+#### Service Dereferencing
+
+Retrieve a service endpoint URL using the `?service=` query parameter. The value is the service's fragment name without `#`.
+
+**Request:**
+```
+GET /1.0/identifiers/did:nfd:nfdomains.algo?service=web
+```
+
+**Response (200 OK):**
+```json
+{
+  "dereferencingMetadata": {
+    "contentType": "application/did+json"
+  },
+  "contentStream": "https://nfdomains.com",
+  "contentMetadata": {}
+}
+```
+
+**With `relativeRef`:**
+```
+GET /1.0/identifiers/did:nfd:nfdomains.algo?service=web&relativeRef=/about
+```
+
+Returns the endpoint URL with the relative reference resolved: `"https://nfdomains.com/about"`.
+
+**With `Accept: text/uri-list`:**
+```
+GET /1.0/identifiers/did:nfd:nfdomains.algo?service=web
+Accept: text/uri-list
+```
+
+Returns HTTP 303 (See Other) with a `Location` header pointing to the service endpoint URL.
+
 ### GET /health
 
 Health check endpoint.
@@ -650,9 +726,10 @@ Returns metadata about the `did:nfd` method.
 
 | Code | Meaning | When |
 |------|---------|------|
-| 200 | OK | DID resolved successfully |
-| 400 | Bad Request | Invalid DID format (e.g., wrong method, segment name, uppercase) |
-| 404 | Not Found | NFD does not exist on the blockchain |
+| 200 | OK | DID resolved or dereferenced successfully |
+| 303 | See Other | Service dereferencing with `Accept: text/uri-list` (redirects to endpoint URL) |
+| 400 | Bad Request | Invalid DID format or invalid DID URL |
+| 404 | Not Found | NFD does not exist, or fragment/service not found in document |
 | 410 | Gone | DID is deactivated (expired, for sale, unowned, or explicitly deactivated) |
 | 500 | Internal Server Error | Blockchain query failed or unexpected error |
 
@@ -813,6 +890,22 @@ curl -s http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo | jq .
 # Request JSON-LD format
 curl -s -H "Accept: application/did+ld+json" \
   http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo | jq .
+
+# Dereference a specific verification method (fragment)
+curl -s http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo%23owner | jq .
+
+# Dereference the X25519 key agreement
+curl -s http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo%23x25519-owner | jq .
+
+# Dereference a service by name
+curl -s "http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo?service=web" | jq .
+
+# Service dereference with relative reference
+curl -s "http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo?service=web&relativeRef=/about" | jq .
+
+# Service dereference with redirect (303)
+curl -v -H "Accept: text/uri-list" \
+  "http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo?service=web"
 
 # Health check
 curl -s http://localhost:8080/health | jq .
