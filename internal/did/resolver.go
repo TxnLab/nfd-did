@@ -185,8 +185,8 @@ func (r *nfdDIDResolver) buildResolutionResult(
 		addresses := strings.Split(caAlgo, ",")
 		for i, addr := range addresses {
 			addr = strings.TrimSpace(addr)
-			if addr == "" || addr == ownerAddr {
-				continue // skip empty or duplicate of owner
+			if addr == "" {
+				continue
 			}
 			multibase, err := AlgorandAddressToMultibase(addr)
 			if err != nil {
@@ -274,6 +274,11 @@ func (r *nfdDIDResolver) buildResolutionResult(
 	if !existingIDs[didID+"#profile"] {
 		if profileSvc := buildProfileService(didID, props); profileSvc != nil {
 			doc.Service = append(doc.Service, *profileSvc)
+		}
+	}
+	if !existingIDs[didID+"#deposit"] {
+		if depositSvc := buildDepositService(didID, props); depositSvc != nil {
+			doc.Service = append(doc.Service, *depositSvc)
 		}
 	}
 	for _, svc := range buildSocialMediaServices(didID, props) {
@@ -371,6 +376,26 @@ func buildProfileService(didID string, props nfd.Properties) *Service {
 			Avatar: avatar,
 			Banner: banner,
 		},
+	}
+}
+
+// buildDepositService builds an AlgorandDepositAccount service from the resolved deposit address.
+// Priority: v.caAlgo[0] (first verified address) → i.owner.
+// Returns nil if no deposit address is available.
+func buildDepositService(didID string, props nfd.Properties) *Service {
+	var depositAddr string
+	if caAlgo := props.Verified["caAlgo"]; caAlgo != "" {
+		depositAddr = strings.Split(caAlgo, ",")[0]
+	} else {
+		depositAddr = props.Internal["owner"]
+	}
+	if depositAddr == "" {
+		return nil
+	}
+	return &Service{
+		ID:              didID + "#deposit",
+		Type:            "AlgorandDepositAccount",
+		ServiceEndpoint: depositAddr,
 	}
 }
 

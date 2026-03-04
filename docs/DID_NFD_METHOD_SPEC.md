@@ -205,10 +205,11 @@ per [W3C DID Resolution](https://www.w3.org/TR/did-resolution/), returning only 
 |---------------------------------------|--------------------------------------------------------------------------------------------|
 | `did:nfd:nfdomains.algo#owner`        | The primary verification method derived from the NFD owner's Algorand address              |
 | `did:nfd:nfdomains.algo#x25519-owner` | The X25519 key agreement key derived from the owner's Ed25519 public key                   |
-| `did:nfd:nfdomains.algo#algo-0`       | The first verified Algorand address from `v.caAlgo` (excluding the owner)                  |
+| `did:nfd:nfdomains.algo#algo-0`       | The first verified Algorand address from `v.caAlgo`                                        |
 | `did:nfd:nfdomains.algo#key-1`        | An additional verification method declared via `u.keys`                                    |
 | `did:nfd:nfdomains.algo#web`          | The LinkedDomains service endpoint (from `v.domain`, `u.website`, `u.url`, or `u.service`) |
 | `did:nfd:nfdomains.algo#profile`      | The auto-generated NFDProfile service (from `u.name`, `u.bio`, `u.avatar`, `u.banner`)     |
+| `did:nfd:nfdomains.algo#deposit`      | The auto-generated AlgorandDepositAccount service (`v.caAlgo[0]` or `i.owner`)             |
 | `did:nfd:nfdomains.algo#twitter`      | Auto-generated SocialMedia service for Twitter/X                                           |
 | `did:nfd:nfdomains.algo#github`       | Auto-generated SocialMedia service for GitHub                                              |
 | `did:nfd:nfdomains.algo#bluesky`      | Auto-generated SocialMedia service for Bluesky (from `v.blueskydid`)                       |
@@ -332,8 +333,7 @@ performs the following steps:
     - `type`: `X25519KeyAgreementKey2020`
 
 7. **Build verification methods from verified Algorand addresses (`v.caAlgo`).** Parse the comma-delimited list of
-   verified Algorand addresses. For each address that is not a duplicate of the owner address, create an additional
-   `VerificationMethod` with:
+   verified Algorand addresses. For each address, create an additional `VerificationMethod` with:
     - `id`: `did:nfd:<name>#algo-<index>`
     - `type`: `Ed25519VerificationKey2020`
 
@@ -353,7 +353,13 @@ performs the following steps:
     `#profile` service is created. The `#profile` service is skipped if a service with that ID already exists in
     `u.service`.
 
-11. **Build SocialMedia services.** For each supported social media platform, check for a handle in verified (`v.*`) or
+11. **Build the `#deposit` AlgorandDepositAccount service.** Resolve the deposit address using priority: first verified
+    address from `v.caAlgo` (the first entry if multiple are present), then the owner address (`i.owner`). If a deposit
+    address is found, create an `AlgorandDepositAccount` service with `id: "#deposit"` and the address as the
+    `serviceEndpoint`. The `#deposit` service is skipped if a service with that ID already exists in `u.service`. This
+    service is only present for active (non-deactivated) NFDs.
+
+12. **Build SocialMedia services.** For each supported social media platform, check for a handle in verified (`v.*`) or
     user-defined (`u.*`) properties (verified takes priority). If a handle is found, create a `SocialMedia` service with
     the platform's URL. If the handle already contains the platform URL prefix, it is used as-is; otherwise, the handle
     is formatted into the URL template. Services are skipped if a service with the same ID already exists in`u.service`.
@@ -368,16 +374,16 @@ performs the following steps:
     | Bluesky | `blueskydid` | `#bluesky` | `https://bsky.app/profile/{blueskydid}` |
 
     The final service ordering is: `#web` (LinkedDomains) → user-defined services from `u.service` → `#profile` (
-    NFDProfile) → social media services (in platform table order).
+    NFDProfile) → `#deposit` (AlgorandDepositAccount) → social media services (in platform table order).
 
-12. **Build `alsoKnownAs`.** Collect alternative identifiers:
+13. **Build `alsoKnownAs`.** Collect alternative identifiers:
     - If `v.blueskydid` is set, add it as the first entry (this is a verified Bluesky DID).
     - If `u.alsoKnownAs` contains a valid JSON array of strings, append them.
 
-13. **Set the controller.** The controller defaults to the DID itself (self-sovereign). If `u.controller` is set, its
+14. **Set the controller.** The controller defaults to the DID itself (self-sovereign). If `u.controller` is set, its
     value overrides the default controller.
 
-14. **Assemble the DID Document** with the standard JSON-LD contexts and all constructed elements.
+15. **Assemble the DID Document** with the standard JSON-LD contexts and all constructed elements.
 
 ### 7.2 Example DID Document
 
@@ -444,6 +450,11 @@ The following is a complete example of a DID Document resolved from `did:nfd:nfd
         "avatar": "https://images.nf.domains/avatar.png",
         "banner": "https://images.nf.domains/banner.png"
       }
+    },
+    {
+      "id": "did:nfd:nfdomains.algo#deposit",
+      "type": "AlgorandDepositAccount",
+      "serviceEndpoint": "GD64YIY3TWGDMCNPP553DZPPR6LDUSFQOIJVFDPPNRL7NMBER5MVERCIBI"
     },
     {
       "id": "did:nfd:nfdomains.algo#twitter",
@@ -590,7 +601,7 @@ special configuration by the NFD owner.
 | `i.timeChanged`    | Internal  | `didDocumentMetadata.updated`                                | Unix timestamp of the last NFD modification. Formatted as RFC 3339.                                                                                                                                                                        |
 | `i.expirationTime` | Internal  | `didDocumentMetadata.deactivated`                            | Unix timestamp of NFD expiration. If in the past, the DID is deactivated.                                                                                                                                                                  |
 | `i.sellamt`        | Internal  | `didDocumentMetadata.deactivated`                            | Sale amount in microAlgos. If non-zero, the NFD is for sale and the DID is deactivated.                                                                                                                                                    |
-| `v.caAlgo`         | Verified  | `verificationMethod[1..n]`                                   | Comma-delimited list of verified Algorand addresses (decoded from packed 32-byte public keys in box storage). Each address becomes an additional Ed25519 verification method (`#algo-<index>`). Duplicate of the owner address is skipped. |
+| `v.caAlgo`         | Verified  | `verificationMethod[1..n]`, `service` (`#deposit`)           | Comma-delimited list of verified Algorand addresses (decoded from packed 32-byte public keys in box storage). Each address becomes an additional Ed25519 verification method (`#algo-<index>`). The first address is also used as the `#deposit` AlgorandDepositAccount service endpoint (priority: `v.caAlgo[0]` > `i.owner`). |
 | `v.domain`         | Verified  | `service` (`#web`)                                           | Verified domain URL. Highest priority source for the `#web` LinkedDomains service endpoint (priority: `v.domain` > `u.website` > `u.url` > `u.service`).                                                                                   |
 | `v.blueskydid`     | Verified  | `alsoKnownAs[0]`, `service` (`#bluesky`)                     | Verified Bluesky DID (`did:plc:...`). Added as the first entry in `alsoKnownAs`. Also auto-generates a `#bluesky` SocialMedia service with URL `https://bsky.app/profile/{blueskydid}`.                                                    |
 | `v.avatar`         | Verified  | `service` (`#profile`)                                       | Verified avatar URL. Takes priority over `u.avatar` in the NFDProfile service endpoint.                                                                                                                                                    |

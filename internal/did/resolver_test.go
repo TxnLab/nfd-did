@@ -231,7 +231,7 @@ func TestResolve_WithVerifiedAddresses(t *testing.T) {
 	assert.Equal(t, "did:nfd:patrick.algo#algo-0", doc.VerificationMethod[1].ID)
 }
 
-func TestResolve_WithVerifiedAddresses_SkipsDuplicateOwner(t *testing.T) {
+func TestResolve_WithVerifiedAddresses_OwnerNotSkipped(t *testing.T) {
 	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
 	futureExpiry := strconv.FormatUint(uint64(time.Now().Add(365*24*time.Hour).Unix()), 10)
 
@@ -244,7 +244,7 @@ func TestResolve_WithVerifiedAddresses_SkipsDuplicateOwner(t *testing.T) {
 			},
 			UserDefined: map[string]string{},
 			Verified: map[string]string{
-				// caAlgo includes the owner address — should be deduplicated
+				// caAlgo includes the owner address — should still appear as #algo-0
 				"caAlgo": ownerAddr,
 			},
 		},
@@ -255,8 +255,10 @@ func TestResolve_WithVerifiedAddresses_SkipsDuplicateOwner(t *testing.T) {
 	result, err := resolver.Resolve(context.Background(), "did:nfd:test.algo")
 	require.NoError(t, err)
 
-	// Only owner key, verified duplicate skipped
-	assert.Len(t, result.DIDDocument.VerificationMethod, 1)
+	// Owner key (#owner) + verified linked address (#algo-0), even though same address
+	assert.Len(t, result.DIDDocument.VerificationMethod, 2)
+	assert.Equal(t, "did:nfd:test.algo#owner", result.DIDDocument.VerificationMethod[0].ID)
+	assert.Equal(t, "did:nfd:test.algo#algo-0", result.DIDDocument.VerificationMethod[1].ID)
 }
 
 func TestResolve_ExpiredNFD(t *testing.T) {
@@ -389,7 +391,7 @@ func TestResolve_WithServiceEndpoints(t *testing.T) {
 	require.NoError(t, err)
 
 	doc := result.DIDDocument
-	require.Len(t, doc.Service, 2)
+	require.Len(t, doc.Service, 3) // #web + #messaging + #deposit
 	assert.Equal(t, "did:nfd:patrick.algo#web", doc.Service[0].ID)
 	assert.Equal(t, "LinkedDomains", doc.Service[0].Type)
 	assert.Equal(t, "https://patrick.algo.xyz", doc.Service[0].ServiceEndpoint)
@@ -421,49 +423,49 @@ func TestResolve_WebLinkedDomains_Priority(t *testing.T) {
 			verified:    map[string]string{"domain": "https://verified.com"},
 			userDefined: map[string]string{},
 			wantURL:     "https://verified.com",
-			wantCount:   1,
+			wantCount:   2, // #web + #deposit
 		},
 		{
 			name:        "u.website creates #web when v.domain absent",
 			verified:    map[string]string{},
 			userDefined: map[string]string{"website": "https://mysite.com"},
 			wantURL:     "https://mysite.com",
-			wantCount:   1,
+			wantCount:   2, // #web + #deposit
 		},
 		{
 			name:        "u.url creates #web when v.domain and u.website absent",
 			verified:    map[string]string{},
 			userDefined: map[string]string{"url": "https://myurl.com"},
 			wantURL:     "https://myurl.com",
-			wantCount:   1,
+			wantCount:   2, // #web + #deposit
 		},
 		{
 			name:        "v.domain beats u.website and u.url",
 			verified:    map[string]string{"domain": "https://verified.com"},
 			userDefined: map[string]string{"website": "https://mysite.com", "url": "https://myurl.com"},
 			wantURL:     "https://verified.com",
-			wantCount:   1,
+			wantCount:   2, // #web + #deposit
 		},
 		{
 			name:        "u.website beats u.url",
 			verified:    map[string]string{},
 			userDefined: map[string]string{"website": "https://mysite.com", "url": "https://myurl.com"},
 			wantURL:     "https://mysite.com",
-			wantCount:   1,
+			wantCount:   2, // #web + #deposit
 		},
 		{
 			name:        "v.domain overrides u.service #web, preserves other services",
 			verified:    map[string]string{"domain": "https://verified.com"},
 			userDefined: map[string]string{"service": string(servicesJSON)},
 			wantURL:     "https://verified.com",
-			wantCount:   2,
+			wantCount:   3, // #web + #messaging + #deposit
 		},
 		{
 			name:        "no sources — u.service #web used as-is",
 			verified:    map[string]string{},
 			userDefined: map[string]string{"service": string(servicesJSON)},
 			wantURL:     "https://from-service.com",
-			wantCount:   2,
+			wantCount:   3, // #web + #messaging + #deposit
 		},
 	}
 
@@ -992,9 +994,9 @@ func TestResolve_ServiceOrdering(t *testing.T) {
 	require.NoError(t, err)
 
 	doc := result.DIDDocument
-	require.GreaterOrEqual(t, len(doc.Service), 5, "expected at least 5 services")
+	require.GreaterOrEqual(t, len(doc.Service), 6, "expected at least 6 services")
 
-	// Verify ordering: #web → user services → #profile → social media
+	// Verify ordering: #web → user services → #profile → #deposit → social media
 	var ids []string
 	for _, svc := range doc.Service {
 		ids = append(ids, svc.ID)
@@ -1003,8 +1005,9 @@ func TestResolve_ServiceOrdering(t *testing.T) {
 	assert.Equal(t, "did:nfd:patrick.algo#web", ids[0], "first should be #web")
 	assert.Equal(t, "did:nfd:patrick.algo#messaging", ids[1], "second should be user-defined service")
 	assert.Equal(t, "did:nfd:patrick.algo#profile", ids[2], "third should be #profile")
-	assert.Equal(t, "did:nfd:patrick.algo#twitter", ids[3], "fourth should be #twitter")
-	assert.Equal(t, "did:nfd:patrick.algo#github", ids[4], "fifth should be #github")
+	assert.Equal(t, "did:nfd:patrick.algo#deposit", ids[3], "fourth should be #deposit")
+	assert.Equal(t, "did:nfd:patrick.algo#twitter", ids[4], "fifth should be #twitter")
+	assert.Equal(t, "did:nfd:patrick.algo#github", ids[5], "sixth should be #github")
 }
 
 func TestResolve_FullDocument(t *testing.T) {
@@ -1049,7 +1052,7 @@ func TestResolve_FullDocument(t *testing.T) {
 	assert.Len(t, doc.Authentication, 1)
 	assert.Len(t, doc.AssertionMethod, 1)
 	assert.Len(t, doc.KeyAgreement, 1)
-	assert.Len(t, doc.Service, 2) // #web + #bluesky
+	assert.Len(t, doc.Service, 3) // #web + #deposit + #bluesky
 	assert.Len(t, doc.AlsoKnownAs, 1)
 	assert.Equal(t, "did:plc:abc123", doc.AlsoKnownAs[0])
 
@@ -1059,4 +1062,138 @@ func TestResolve_FullDocument(t *testing.T) {
 	assert.Contains(t, string(jsonBytes), `"@context"`)
 	assert.Contains(t, string(jsonBytes), `"verificationMethod"`)
 	assert.Contains(t, string(jsonBytes), `"publicKeyMultibase"`)
+}
+
+func TestResolve_DepositService_VerifiedCaAlgo(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+	verifiedAddr := "7777777777777777777777777777777777777777777777777774MSJUVU"
+	futureExpiry := strconv.FormatUint(uint64(time.Now().Add(365*24*time.Hour).Unix()), 10)
+
+	mock := &mockNfdFetcher{
+		didResult: nfd.Properties{
+			Internal: map[string]string{
+				"name":           "patrick.algo",
+				"owner":          ownerAddr,
+				"expirationTime": futureExpiry,
+			},
+			UserDefined: map[string]string{},
+			Verified: map[string]string{
+				"caAlgo": verifiedAddr + "," + ownerAddr,
+			},
+		},
+		didAppID: 12345,
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:patrick.algo")
+	require.NoError(t, err)
+
+	var depositSvc *Service
+	for i := range result.DIDDocument.Service {
+		if result.DIDDocument.Service[i].ID == "did:nfd:patrick.algo#deposit" {
+			depositSvc = &result.DIDDocument.Service[i]
+			break
+		}
+	}
+	require.NotNil(t, depositSvc, "expected #deposit service")
+	assert.Equal(t, "AlgorandDepositAccount", depositSvc.Type)
+	assert.Equal(t, verifiedAddr, depositSvc.ServiceEndpoint, "deposit should be first v.caAlgo address")
+}
+
+func TestResolve_DepositService_OwnerFallback(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+	futureExpiry := strconv.FormatUint(uint64(time.Now().Add(365*24*time.Hour).Unix()), 10)
+
+	mock := &mockNfdFetcher{
+		didResult: nfd.Properties{
+			Internal: map[string]string{
+				"name":           "patrick.algo",
+				"owner":          ownerAddr,
+				"expirationTime": futureExpiry,
+			},
+			UserDefined: map[string]string{},
+			Verified:    map[string]string{},
+		},
+		didAppID: 12345,
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:patrick.algo")
+	require.NoError(t, err)
+
+	var depositSvc *Service
+	for i := range result.DIDDocument.Service {
+		if result.DIDDocument.Service[i].ID == "did:nfd:patrick.algo#deposit" {
+			depositSvc = &result.DIDDocument.Service[i]
+			break
+		}
+	}
+	require.NotNil(t, depositSvc, "expected #deposit service")
+	assert.Equal(t, "AlgorandDepositAccount", depositSvc.Type)
+	assert.Equal(t, ownerAddr, depositSvc.ServiceEndpoint, "deposit should fall back to i.owner")
+}
+
+func TestResolve_DepositService_Dedup(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+	futureExpiry := strconv.FormatUint(uint64(time.Now().Add(365*24*time.Hour).Unix()), 10)
+
+	// User defines a custom #deposit service in u.service
+	services := []Service{
+		{ID: "#deposit", Type: "AlgorandDepositAccount", ServiceEndpoint: "CUSTOMADDR"},
+	}
+	servicesJSON, _ := json.Marshal(services)
+
+	mock := &mockNfdFetcher{
+		didResult: nfd.Properties{
+			Internal: map[string]string{
+				"name":           "patrick.algo",
+				"owner":          ownerAddr,
+				"expirationTime": futureExpiry,
+			},
+			UserDefined: map[string]string{
+				"service": string(servicesJSON),
+			},
+			Verified: map[string]string{},
+		},
+		didAppID: 12345,
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:patrick.algo")
+	require.NoError(t, err)
+
+	depositCount := 0
+	for _, svc := range result.DIDDocument.Service {
+		if svc.ID == "did:nfd:patrick.algo#deposit" {
+			depositCount++
+			assert.Equal(t, "CUSTOMADDR", svc.ServiceEndpoint, "user-defined #deposit should be preserved")
+		}
+	}
+	assert.Equal(t, 1, depositCount, "should have exactly one #deposit service")
+}
+
+func TestResolve_DepositService_Deactivated(t *testing.T) {
+	pastExpiry := strconv.FormatUint(uint64(time.Now().Add(-24*time.Hour).Unix()), 10)
+
+	mock := &mockNfdFetcher{
+		didResult: nfd.Properties{
+			Internal: map[string]string{
+				"name":           "expired.algo",
+				"owner":          "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ",
+				"expirationTime": pastExpiry,
+			},
+			UserDefined: map[string]string{},
+			Verified:    map[string]string{},
+		},
+		didAppID: 55555,
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:expired.algo")
+	require.NoError(t, err)
+
+	assert.True(t, result.DocumentMetadata.Deactivated)
+	for _, svc := range result.DIDDocument.Service {
+		assert.NotEqual(t, "did:nfd:expired.algo#deposit", svc.ID, "deactivated NFD should not have #deposit service")
+	}
 }
