@@ -14,8 +14,8 @@ jobs:
       packages: write
     strategy:
       matrix:
-        # build and publish in parallel: linux/windows/darwin, amd64/arm64
-        goos: [linux, windows, darwin]
+        # build and publish in parallel: linux, amd64/arm64
+        goos: [linux]
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
