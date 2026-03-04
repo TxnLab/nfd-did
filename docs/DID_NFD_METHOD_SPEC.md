@@ -6,9 +6,9 @@
 
 **Status:** Draft
 
-**Created:** 2025-01-01
+**Created:** 2025-02-01
 
-**Updated:** 2025-02-13
+**Updated:** 2026-03-04
 
 **Latest version:** https://github.com/TxnLab/nfd-did/blob/main/docs/DID_NFD_METHOD_SPEC.md
 
@@ -30,6 +30,7 @@
     - 8.2 [Read (Resolve)](#82-read-resolve)
     - 8.3 [Update](#83-update)
     - 8.4 [Deactivate](#84-deactivate)
+    - 8.5 [Reverse Resolution](#85-reverse-resolution)
 9. [NFD Property Mapping](#9-nfd-property-mapping)
     - 9.1 [Derived Properties](#91-derived-properties)
     - 9.2 [Optional User-Defined Properties](#92-optional-user-defined-properties)
@@ -136,7 +137,12 @@ Per the DID Core specification, the method name MUST be lowercase.
 
 ## 5. DID Method Specific Identifier
 
-The method-specific identifier is an NFD name (root or single-segment). The formal ABNF grammar is:
+The method-specific identifier is either an NFD name (root or single-segment) or an Algorand address (for reverse
+resolution).
+
+### 5.1 NFD Name Identifier
+
+The formal ABNF grammar for NFD name identifiers:
 
 ```abnf
 nfd-did        = "did:nfd:" nfd-name
@@ -152,6 +158,21 @@ As a regular expression:
 ^did:nfd:([a-z0-9]{1,27}\.){1,2}algo$
 ```
 
+### 5.2 Algorand Address Identifier (Reverse Resolution)
+
+An Algorand address MAY be used as the method-specific identifier for reverse resolution — discovering which NFDs are
+associated with a given address. The identifier is a 58-character uppercase base32 Algorand address:
+
+```abnf
+nfd-address-did = "did:nfd:" algo-address
+algo-address    = 58( ALPHA-UPPER / DIGIT )
+ALPHA-UPPER     = %x41-5A           ; A-Z (uppercase only)
+DIGIT           = %x30-39 / %x32-37 ; base32 characters
+```
+
+Since NFD names use only lowercase characters and end with `.algo`, there is no ambiguity between the two identifier
+forms.
+
 ### Constraints
 
 - Each `nfd-label` MUST be between 1 and 27 characters, consisting only of lowercase ASCII letters (`a-z`) and digits (
@@ -161,20 +182,22 @@ As a regular expression:
 - Both root NFDs (`name.algo`) and single-segment NFDs (`segment.name.algo`) are valid DIDs. Each segment NFD is an
   independent NFD with its own on-chain Application.
 - Multi-level segments (e.g., `a.b.c.algo`) MUST be rejected with an `invalidDid` error.
+- Algorand address identifiers MUST be valid 58-character base32 addresses that pass checksum validation.
 
 ### Examples
 
-| DID                           | Valid  | Notes                              |
-|-------------------------------|--------|------------------------------------|
-| `did:nfd:nfdomains.algo`      | Yes    | Root NFD                           |
-| `did:nfd:abc123.algo`         | Yes    | Alphanumeric label                 |
-| `did:nfd:a.algo`              | Yes    | Minimum label length (1 character) |
-| `did:nfd:mail.nfdomains.algo` | Yes    | Single-segment NFD                 |
-| `did:nfd:a.b.c.algo`          | **No** | Multi-level segment -- not valid   |
-| `did:nfd:Nfdomains.algo`      | **No** | Uppercase characters not permitted |
-| `did:nfd:my-name.algo`        | **No** | Hyphens not permitted              |
-| `did:nfd:nfdomains.eth`       | **No** | Must end with `.algo`              |
-| `did:nfd:patrick`             | **No** | Missing `.algo` suffix             |
+| DID                           | Valid  | Notes                                 |
+|-------------------------------|--------|---------------------------------------|
+| `did:nfd:nfdomains.algo`      | Yes    | Root NFD                              |
+| `did:nfd:abc123.algo`         | Yes    | Alphanumeric label                    |
+| `did:nfd:a.algo`              | Yes    | Minimum label length (1 character)    |
+| `did:nfd:mail.nfdomains.algo` | Yes    | Single-segment NFD                    |
+| `did:nfd:RXZRFW26...KLIQY`    | Yes    | Algorand address (reverse resolution) |
+| `did:nfd:a.b.c.algo`          | **No** | Multi-level segment -- not valid      |
+| `did:nfd:Nfdomains.algo`      | **No** | Uppercase characters not permitted    |
+| `did:nfd:my-name.algo`        | **No** | Hyphens not permitted                 |
+| `did:nfd:nfdomains.eth`       | **No** | Must end with `.algo`                 |
+| `did:nfd:patrick`             | **No** | Missing `.algo` suffix                |
 
 ---
 
@@ -365,7 +388,7 @@ performs the following steps:
     is formatted into the URL template. Services are skipped if a service with the same ID already exists in`u.service`.
 
     | Platform | NFD Key | Fragment | URL Template |
-        |----------|---------|----------|-------------|
+    |----------|---------|----------|-------------|
     | Twitter/X | `twitter` | `#twitter` | `https://x.com/{handle}` |
     | Discord | `discord` | `#discord` | `https://discord.com/users/{handle}` |
     | Telegram | `telegram` | `#telegram` | `https://t.me/{handle}` |
@@ -578,6 +601,23 @@ No separate "DID registration" transaction is needed. The act of minting an NFD 
 | **Effect**       | The resolver returns a minimal DID Document (only `@context` and `id`) with `didDocumentMetadata.deactivated` set to `true`.                                                                                         |
 | **Reactivation** | Deactivation is reversible. Renewing an expired NFD, removing a sale listing, transferring ownership back to an external account, or setting `u.deactivated` to a value other than `"true"` will reactivate the DID. |
 
+### 8.5 Reverse Resolution
+
+| Aspect            | Details                                                                                                                                                                                                                                                                                                                                                                                                                             |
+|-------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Method**        | Resolve `did:nfd:{ADDRESS}` where `{ADDRESS}` is a 58-character Algorand address. Queries the NFD Registry to discover all NFDs associated with the address.                                                                                                                                                                                                                                                                        |
+| **Process**       | 1. Validate the Algorand address format. 2. Derive the Ed25519 public key from the address. 3. Query the NFD Registry box `sha256("addr/algo/" + rawPK)`. 4. Extract NFD App IDs from the packed box data (8-byte big-endian uint64s). 5. For each App ID, read `i.name` from the application's global state. 6. Construct a DID Document with the address's key as a verification method and associated NFD DIDs in `alsoKnownAs`. |
+| **Input**         | A DID string of the form `did:nfd:{ADDRESS}` where `{ADDRESS}` is a valid 58-character Algorand address.                                                                                                                                                                                                                                                                                                                            |
+| **Output**        | A standard `ResolutionResult` containing a DID Document. The `alsoKnownAs` field lists all associated `did:nfd:name.algo` identifiers.                                                                                                                                                                                                                                                                                              |
+| **On-chain**      | Fully on-chain via algod. The NFD Registry maintains `addr/algo/{rawPK}` boxes for all addresses that are NFD owners or verified linked accounts (`v.caAlgo`). No external indexer or API is required.                                                                                                                                                                                                                              |
+| **HTTP endpoint** | `GET /1.0/identifiers/did:nfd:{ADDRESS}` — uses the same resolution endpoint as NFD name identifiers.                                                                                                                                                                                                                                                                                                                               |
+| **Empty result**  | If the address is not associated with any NFD, the result contains an empty `alsoKnownAs` array. This is not an error — the DID Document is still valid with the address's verification method.                                                                                                                                                                                                                                     |
+
+> **Note:** Reverse resolution is a method-specific extension of the `did:nfd` method. It
+> is not defined by the W3C DID Core or DID Resolution specifications (which cover forward
+> resolution only). This capability is enabled by the NFD Registry's on-chain address-to-NFD
+> index, making reverse resolution as trustworthy and decentralized as forward resolution.
+
 ---
 
 ## 9. NFD Property Mapping
@@ -593,25 +633,25 @@ NFD properties are organized into three namespaces stored in the Algorand Applic
 These properties are automatically read from the NFD and used to construct the DID Document. They do not require any
 special configuration by the NFD owner.
 
-| NFD Property       | Namespace | DID Document Element                                         | Description                                                                                                                                                                                                                                |
-|--------------------|-----------|--------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `i.name`           | Internal  | `id`                                                         | The NFD name. Used to construct the DID identifier (`did:nfd:<name>`).                                                                                                                                                                     |
-| `i.owner`          | Internal  | `verificationMethod[0]`, `authentication`, `assertionMethod` | The Algorand address of the NFD owner. Decoded to an Ed25519 public key and used as the primary verification method (`#owner`). Also used to derive the X25519 key agreement key (`#x25519-owner`).                                        |
-| `i.timeCreated`    | Internal  | `didDocumentMetadata.created`                                | Unix timestamp of NFD creation. Formatted as RFC 3339 (e.g., `2024-03-15T12:00:00Z`).                                                                                                                                                      |
-| `i.timeChanged`    | Internal  | `didDocumentMetadata.updated`                                | Unix timestamp of the last NFD modification. Formatted as RFC 3339.                                                                                                                                                                        |
-| `i.expirationTime` | Internal  | `didDocumentMetadata.deactivated`                            | Unix timestamp of NFD expiration. If in the past, the DID is deactivated.                                                                                                                                                                  |
-| `i.sellamt`        | Internal  | `didDocumentMetadata.deactivated`                            | Sale amount in microAlgos. If non-zero, the NFD is for sale and the DID is deactivated.                                                                                                                                                    |
+| NFD Property       | Namespace | DID Document Element                                         | Description                                                                                                                                                                                                                                                                                                                     |
+|--------------------|-----------|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `i.name`           | Internal  | `id`                                                         | The NFD name. Used to construct the DID identifier (`did:nfd:<name>`).                                                                                                                                                                                                                                                          |
+| `i.owner`          | Internal  | `verificationMethod[0]`, `authentication`, `assertionMethod` | The Algorand address of the NFD owner. Decoded to an Ed25519 public key and used as the primary verification method (`#owner`). Also used to derive the X25519 key agreement key (`#x25519-owner`).                                                                                                                             |
+| `i.timeCreated`    | Internal  | `didDocumentMetadata.created`                                | Unix timestamp of NFD creation. Formatted as RFC 3339 (e.g., `2024-03-15T12:00:00Z`).                                                                                                                                                                                                                                           |
+| `i.timeChanged`    | Internal  | `didDocumentMetadata.updated`                                | Unix timestamp of the last NFD modification. Formatted as RFC 3339.                                                                                                                                                                                                                                                             |
+| `i.expirationTime` | Internal  | `didDocumentMetadata.deactivated`                            | Unix timestamp of NFD expiration. If in the past, the DID is deactivated.                                                                                                                                                                                                                                                       |
+| `i.sellamt`        | Internal  | `didDocumentMetadata.deactivated`                            | Sale amount in microAlgos. If non-zero, the NFD is for sale and the DID is deactivated.                                                                                                                                                                                                                                         |
 | `v.caAlgo`         | Verified  | `verificationMethod[1..n]`, `service` (`#deposit`)           | Comma-delimited list of verified Algorand addresses (decoded from packed 32-byte public keys in box storage). Each address becomes an additional Ed25519 verification method (`#algo-<index>`). The first address is also used as the `#deposit` AlgorandDepositAccount service endpoint (priority: `v.caAlgo[0]` > `i.owner`). |
-| `v.domain`         | Verified  | `service` (`#web`)                                           | Verified domain URL. Highest priority source for the `#web` LinkedDomains service endpoint (priority: `v.domain` > `u.website` > `u.url` > `u.service`).                                                                                   |
-| `v.blueskydid`     | Verified  | `alsoKnownAs[0]`, `service` (`#bluesky`)                     | Verified Bluesky DID (`did:plc:...`). Added as the first entry in `alsoKnownAs`. Also auto-generates a `#bluesky` SocialMedia service with URL `https://bsky.app/profile/{blueskydid}`.                                                    |
-| `v.avatar`         | Verified  | `service` (`#profile`)                                       | Verified avatar URL. Takes priority over `u.avatar` in the NFDProfile service endpoint.                                                                                                                                                    |
-| `v.banner`         | Verified  | `service` (`#profile`)                                       | Verified banner URL. Takes priority over `u.banner` in the NFDProfile service endpoint.                                                                                                                                                    |
-| `v.twitter`        | Verified  | `service` (`#twitter`)                                       | Verified Twitter/X handle. Takes priority over `u.twitter`. Auto-generates a SocialMedia service.                                                                                                                                          |
-| `v.discord`        | Verified  | `service` (`#discord`)                                       | Verified Discord handle. Takes priority over `u.discord`. Auto-generates a SocialMedia service.                                                                                                                                            |
-| `v.telegram`       | Verified  | `service` (`#telegram`)                                      | Verified Telegram handle. Takes priority over `u.telegram`. Auto-generates a SocialMedia service.                                                                                                                                          |
-| `v.github`         | Verified  | `service` (`#github`)                                        | Verified GitHub handle. Takes priority over `u.github`. Auto-generates a SocialMedia service.                                                                                                                                              |
-| `v.linkedin`       | Verified  | `service` (`#linkedin`)                                      | Verified LinkedIn handle. Takes priority over `u.linkedin`. Auto-generates a SocialMedia service.                                                                                                                                          |
-| `v.blueskydid`     | Verified  | `service` (`#bluesky`)                                       | Verified Bluesky DID. In addition to being added to `alsoKnownAs`, also auto-generates a SocialMedia service with URL `https://bsky.app/profile/{blueskydid}`.                                                                             |
+| `v.domain`         | Verified  | `service` (`#web`)                                           | Verified domain URL. Highest priority source for the `#web` LinkedDomains service endpoint (priority: `v.domain` > `u.website` > `u.url` > `u.service`).                                                                                                                                                                        |
+| `v.blueskydid`     | Verified  | `alsoKnownAs[0]`, `service` (`#bluesky`)                     | Verified Bluesky DID (`did:plc:...`). Added as the first entry in `alsoKnownAs`. Also auto-generates a `#bluesky` SocialMedia service with URL `https://bsky.app/profile/{blueskydid}`.                                                                                                                                         |
+| `v.avatar`         | Verified  | `service` (`#profile`)                                       | Verified avatar URL. Takes priority over `u.avatar` in the NFDProfile service endpoint.                                                                                                                                                                                                                                         |
+| `v.banner`         | Verified  | `service` (`#profile`)                                       | Verified banner URL. Takes priority over `u.banner` in the NFDProfile service endpoint.                                                                                                                                                                                                                                         |
+| `v.twitter`        | Verified  | `service` (`#twitter`)                                       | Verified Twitter/X handle. Takes priority over `u.twitter`. Auto-generates a SocialMedia service.                                                                                                                                                                                                                               |
+| `v.discord`        | Verified  | `service` (`#discord`)                                       | Verified Discord handle. Takes priority over `u.discord`. Auto-generates a SocialMedia service.                                                                                                                                                                                                                                 |
+| `v.telegram`       | Verified  | `service` (`#telegram`)                                      | Verified Telegram handle. Takes priority over `u.telegram`. Auto-generates a SocialMedia service.                                                                                                                                                                                                                               |
+| `v.github`         | Verified  | `service` (`#github`)                                        | Verified GitHub handle. Takes priority over `u.github`. Auto-generates a SocialMedia service.                                                                                                                                                                                                                                   |
+| `v.linkedin`       | Verified  | `service` (`#linkedin`)                                      | Verified LinkedIn handle. Takes priority over `u.linkedin`. Auto-generates a SocialMedia service.                                                                                                                                                                                                                               |
+| `v.blueskydid`     | Verified  | `service` (`#bluesky`)                                       | Verified Bluesky DID. In addition to being added to `alsoKnownAs`, also auto-generates a SocialMedia service with URL `https://bsky.app/profile/{blueskydid}`.                                                                                                                                                                  |
 
 ### 9.2 Optional User-Defined Properties
 

@@ -1,4 +1,6 @@
 FROM golang:1.25-alpine AS builder
+ARG REL_VER=dev
+ARG TARGETARCH
 WORKDIR /
 
 # Install git and certificates
@@ -7,7 +9,7 @@ COPY go.* ./
 RUN go mod download
 COPY ./cmd ./cmd/
 COPY ./internal ./internal/
-RUN --mount=type=cache,target=/root/.cache/go-build env GOOS=linux GOARCH=amd64 go build -v -tags=goexperiment.jsonv2 -o out/did-resolver -ldflags="-s -w" ./cmd/did-resolver
+RUN --mount=type=cache,target=/root/.cache/go-build env GOOS=linux GOARCH=${TARGETARCH} go build -v -tags=goexperiment.jsonv2 -ldflags "-s -w -X main.Version=${REL_VER}" -o out/did-resolver ./cmd/did-resolver
 
 FROM scratch
 WORKDIR /app

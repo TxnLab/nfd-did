@@ -60,7 +60,7 @@ services:
   # ... existing services ...
 
   driver-did-nfd:
-    image: ghcr.io/txnlab/did-nfd-resolver:latest
+    image: txnlab/did-nfd-resolver:latest
     ports:
       - "8167:8080"
     environment:

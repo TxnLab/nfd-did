@@ -41,6 +41,7 @@ var (
 type NfdFetcher interface {
 	FetchNfdDnsVals(ctx context.Context, names []string) (map[string]Properties, error)
 	FetchNfdDidVals(ctx context.Context, name string) (Properties, uint64, error)
+	FindNFDsByAddress(ctx context.Context, address string) ([]string, error)
 }
 type nfdFetcher struct {
 	Client     *algod.Client
@@ -264,6 +265,71 @@ func matchesPropertyFilter(boxName string, propertyList []string) bool {
 func GetRegistryBoxNameForNFD(nfdName string) []byte {
 	hash := sha256.Sum256([]byte("name/" + nfdName))
 	return hash[:]
+}
+
+// GetRegistryBoxNameForAddress returns the registry box key for an Algorand address reverse lookup.
+// The box key is sha256("addr/algo/" + raw32BytePublicKey).
+func GetRegistryBoxNameForAddress(algoAddress types.Address) []byte {
+	hash := sha256.Sum256(bytes.Join([][]byte{[]byte("addr/algo/"), algoAddress[:]}, nil))
+	return hash[:]
+}
+
+// FetchUInt64sFromPackedValue returns all non-zero 64-bit big-endian integers contained in the data slice.
+func FetchUInt64sFromPackedValue(data []byte) ([]uint64, error) {
+	if len(data)%8 != 0 {
+		return nil, fmt.Errorf("data length %d is not a multiple of 8", len(data))
+	}
+	var ints []uint64
+	for offset := 0; offset < len(data); offset += 8 {
+		fetchedInt := binary.BigEndian.Uint64(data[offset : offset+8])
+		if fetchedInt == 0 {
+			continue
+		}
+		ints = append(ints, fetchedInt)
+	}
+	return ints, nil
+}
+
+// FindNFDsByAddress queries the NFD registry for all NFDs associated with a given Algorand address.
+// It returns the NFD names (e.g., "patrick.algo") for all linked NFDs.
+func (n *nfdFetcher) FindNFDsByAddress(ctx context.Context, address string) ([]string, error) {
+	decoded, err := types.DecodeAddress(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Algorand address: %w", err)
+	}
+
+	boxValue, err := n.Client.GetApplicationBoxByName(n.RegistryId, GetRegistryBoxNameForAddress(decoded)).Do(ctx)
+	if err != nil {
+		// Box not found means no NFDs linked to this address
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "box not found") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query registry for address %s: %w", address, err)
+	}
+
+	nfdAppIDs, err := FetchUInt64sFromPackedValue(boxValue.Value)
+	if err != nil {
+		return nil, fmt.Errorf("box address lookup data is invalid: %w", err)
+	}
+
+	// For each App ID, read i.name from the NFD application's global state
+	var nfdNames []string
+	for _, appID := range nfdAppIDs {
+		appData, err := n.Client.GetApplicationByID(appID).Do(ctx)
+		if err != nil {
+			continue // skip NFDs that can't be read
+		}
+		for _, kv := range appData.Params.GlobalState {
+			decodedKey, _ := base64.StdEncoding.DecodeString(kv.Key)
+			if string(decodedKey) == "i.name" {
+				decodedValue, _ := base64.StdEncoding.DecodeString(kv.Value.Bytes)
+				nfdNames = append(nfdNames, string(decodedValue))
+				break
+			}
+		}
+	}
+
+	return nfdNames, nil
 }
 
 func getLookupLSIG(prefixBytes, lookupBytes string, registryAppID uint64) (crypto.LogicSigAccount, error) {

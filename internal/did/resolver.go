@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/algorand/go-algorand-sdk/v2/client/v2/algod"
+	"github.com/algorand/go-algorand-sdk/v2/types"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 
 	"github.com/TxnLab/nfd-did/internal/nfd"
@@ -28,8 +29,9 @@ type NfdDIDResolver interface {
 }
 
 type nfdDIDResolver struct {
-	fetcher  nfd.NfdFetcher
-	docCache *expirable.LRU[string, *ResolutionResult]
+	fetcher      nfd.NfdFetcher
+	docCache     *expirable.LRU[string, *ResolutionResult]
+	reverseCache *expirable.LRU[string, *ResolutionResult]
 }
 
 // validNFD matches root and single-segment NFD names: "name.algo" or "segment.name.algo"
@@ -38,20 +40,24 @@ var validNFD = regexp.MustCompile(`^([a-z0-9]{1,27}\.){1,2}algo$`)
 // NewNfdDIDResolver creates a new DID resolver backed by an Algorand algod client.
 func NewNfdDIDResolver(client *algod.Client, registryID uint64, cacheTTL time.Duration) NfdDIDResolver {
 	return &nfdDIDResolver{
-		fetcher:  nfd.NewNfdFetcher(client, registryID),
-		docCache: expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
+		fetcher:      nfd.NewNfdFetcher(client, registryID),
+		docCache:     expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
+		reverseCache: expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
 	}
 }
 
 // NewNfdDIDResolverWithFetcher creates a resolver with a custom fetcher (useful for testing).
 func NewNfdDIDResolverWithFetcher(fetcher nfd.NfdFetcher, cacheTTL time.Duration) NfdDIDResolver {
 	return &nfdDIDResolver{
-		fetcher:  fetcher,
-		docCache: expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
+		fetcher:      fetcher,
+		docCache:     expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
+		reverseCache: expirable.NewLRU[string, *ResolutionResult](50000, nil, cacheTTL),
 	}
 }
 
 // Resolve resolves a did:nfd identifier to a DID Document.
+// Supports both NFD name identifiers (did:nfd:name.algo) and Algorand address
+// identifiers (did:nfd:{ADDRESS}) for reverse resolution.
 func (r *nfdDIDResolver) Resolve(ctx context.Context, didStr string) (*ResolutionResult, error) {
 	start := time.Now()
 	contentType := ContentTypeDIDJSON
@@ -61,10 +67,15 @@ func (r *nfdDIDResolver) Resolve(ctx context.Context, didStr string) (*Resolutio
 		return cached, nil
 	}
 
-	// Parse and validate the DID
+	// Try to parse as NFD name DID
 	nfdName, err := parseDID(didStr)
 	if err != nil {
-		return ErrorResult(ErrorInvalidDID, contentType), err
+		// Not an NFD name — try as an address DID for reverse resolution
+		address, addrErr := parseAddressDID(didStr)
+		if addrErr != nil {
+			return ErrorResult(ErrorInvalidDID, contentType), err
+		}
+		return r.resolveAddressDID(ctx, didStr, address, contentType, start)
 	}
 
 	// Fetch NFD properties from blockchain
@@ -429,6 +440,93 @@ func buildSocialMediaServices(didID string, props nfd.Properties) []Service {
 		})
 	}
 	return services
+}
+
+// parseAddressDID validates and extracts the Algorand address from a did:nfd:{ADDRESS} string.
+func parseAddressDID(didStr string) (string, error) {
+	if !strings.HasPrefix(didStr, MethodPrefix) {
+		return "", fmt.Errorf("invalid DID method: must start with %s", MethodPrefix)
+	}
+	address := didStr[len(MethodPrefix):]
+	if _, err := types.DecodeAddress(address); err != nil {
+		return "", fmt.Errorf("invalid Algorand address in DID: %w", err)
+	}
+	return address, nil
+}
+
+// resolveAddressDID performs reverse resolution for a did:nfd:{ADDRESS} identifier.
+func (r *nfdDIDResolver) resolveAddressDID(
+	ctx context.Context, didStr, address, contentType string, start time.Time,
+) (*ResolutionResult, error) {
+	// Check reverse cache
+	if cached, ok := r.reverseCache.Get(didStr); ok {
+		return cached, nil
+	}
+
+	didID := MethodPrefix + address
+
+	// Build verification method from the address
+	doc := &DIDDocument{
+		Context: DefaultContexts(),
+		ID:      didID,
+	}
+
+	multibase, err := AlgorandAddressToMultibase(address)
+	if err != nil {
+		return ErrorResult(ErrorInternalError, contentType), err
+	}
+
+	vm := VerificationMethod{
+		ID:                  didID + FragmentOwner,
+		Type:                KeyTypeEd25519,
+		Controller:          didID,
+		PublicKeyMultibase:  multibase,
+		BlockchainAccountId: address,
+	}
+	doc.VerificationMethod = []VerificationMethod{vm}
+	doc.Authentication = []string{vm.ID}
+	doc.AssertionMethod = []string{vm.ID}
+
+	// Derive X25519 key for keyAgreement
+	pubkey, err := AlgorandAddressToEd25519(address)
+	if err == nil {
+		x25519Key, err := Ed25519ToX25519(pubkey)
+		if err == nil {
+			doc.KeyAgreement = []VerificationMethod{{
+				ID:                 didID + "#x25519-owner",
+				Type:               KeyTypeX25519,
+				Controller:         didID,
+				PublicKeyMultibase: X25519ToMultibase(x25519Key),
+			}}
+		}
+	}
+
+	// Reverse lookup: find associated NFDs
+	nfdNames, err := r.fetcher.FindNFDsByAddress(ctx, address)
+	if err != nil {
+		return ErrorResult(ErrorInternalError, contentType), err
+	}
+
+	if len(nfdNames) > 0 {
+		alsoKnownAs := make([]string, len(nfdNames))
+		for i, name := range nfdNames {
+			alsoKnownAs[i] = MethodPrefix + name
+		}
+		doc.AlsoKnownAs = alsoKnownAs
+	}
+
+	result := &ResolutionResult{
+		DIDDocument: doc,
+		ResolutionMetadata: ResolutionMetadata{
+			ContentType: contentType,
+			Retrieved:   time.Now().UTC().Format(time.RFC3339),
+			Duration:    time.Since(start).Milliseconds(),
+		},
+		DocumentMetadata: DocumentMetadata{},
+	}
+
+	r.reverseCache.Add(didStr, result)
+	return result, nil
 }
 
 // ParseDID validates and extracts the NFD name from a did:nfd string (exported for testing).

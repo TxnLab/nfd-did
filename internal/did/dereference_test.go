@@ -399,3 +399,7 @@ func (c *countingFetcher) FetchNfdDidVals(ctx context.Context, name string) (nfd
 	*c.count++
 	return c.inner.FetchNfdDidVals(ctx, name)
 }
+
+func (c *countingFetcher) FindNFDsByAddress(ctx context.Context, address string) ([]string, error) {
+	return c.inner.FindNFDsByAddress(ctx, address)
+}

@@ -7,10 +7,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,8 +50,8 @@ func main() {
 	mux.HandleFunc("GET /1.0/properties", handleProperties)
 	mux.HandleFunc("GET /health", handleHealth)
 
-	log.Printf("Starting DID resolver on %s (algod: %s, registry: %d, cache: %s)",
-		cfg.Listen, cfg.AlgodURL, cfg.RegistryID, cfg.CacheTTL)
+	log.Printf("Starting DID (%s) resolver on %s (algod: %s, registry: %d, cache: %s)",
+		getVersionInfo(), cfg.Listen, cfg.AlgodURL, cfg.RegistryID, cfg.CacheTTL)
 
 	if err := http.ListenAndServe(cfg.Listen, mux); err != nil {
 		log.Fatalf("Server failed: %v", err)
@@ -222,14 +225,15 @@ func handleProperties(w http.ResponseWriter, _ *http.Request) {
 		"method":  "nfd",
 		"network": "algorand",
 		"properties": map[string]interface{}{
-			"identifierFormat":     "did:nfd:<name>.algo",
-			"identifierRegex":      "^did:nfd:([a-z0-9]{1,27}\\.){1,2}algo$",
-			"blockchain":           "algorand",
-			"keyType":              "Ed25519",
-			"supportsDeactivation": true,
-			"supportsExpiration":   true,
-			"supportsKeyAgreement": true,
-			"supportsServices":     true,
+			"identifierFormat":          "did:nfd:<name>.algo",
+			"identifierRegex":           "^did:nfd:([a-z0-9]{1,27}\\.){1,2}algo$",
+			"blockchain":                "algorand",
+			"keyType":                   "Ed25519",
+			"supportsDeactivation":      true,
+			"supportsExpiration":        true,
+			"supportsKeyAgreement":      true,
+			"supportsServices":          true,
+			"supportsReverseResolution": true,
 		},
 	})
 }
@@ -240,4 +244,27 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
+}
+
+// Version is replaced at build time during docker builds w/ 'release' version
+// If not defined, we just return the git rev.
+var Version string
+
+func getVersionInfo() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "The version information could not be determined"
+	}
+	var vcsRev = "(unknown)"
+	if fnd := slices.IndexFunc(info.Settings, func(v debug.BuildSetting) bool { return v.Key == "vcs.revision" }); fnd != -1 {
+		rev := info.Settings[fnd].Value
+		if len(rev) > 7 {
+			rev = rev[:7]
+		}
+		vcsRev = rev
+	}
+	if Version != "" {
+		return fmt.Sprintf("%s [%s]", Version, vcsRev)
+	}
+	return vcsRev
 }

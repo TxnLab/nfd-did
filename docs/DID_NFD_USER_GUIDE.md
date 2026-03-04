@@ -142,10 +142,16 @@ Each of these keys is a fully functional Ed25519 verification method. A verifier
 
 ### Reverse lookups — find DIDs from any address
 
-NFD supports reverse resolution: given any Algorand address, you can discover all NFDs where that address appears as owner or as a verified linked account. This means:
+NFD supports reverse resolution: given any Algorand address, you can discover all NFDs where that address appears as owner or as a verified linked account. Simply resolve `did:nfd:{ADDRESS}` using the same endpoint:
+
+```bash
+curl http://localhost:8080/1.0/identifiers/did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY
+```
+
+The returned DID Document's `alsoKnownAs` field lists all associated NFD DIDs. This means:
 
 - **Forward lookup:** *"What accounts does `did:nfd:nfdomains.algo` reference?"* → The owner address plus all verified linked addresses.
-- **Reverse lookup:** *"For this Algorand account, what DIDs reference it?"* → All NFDs where this account is the owner or a verified linked address.
+- **Reverse lookup:** *"For this Algorand account, what DIDs reference it?"* → All NFDs where this account is the owner or a verified linked address (listed in `alsoKnownAs`).
 
 This bidirectional resolution creates a true **many-to-many** relationship:
 
@@ -613,6 +619,72 @@ The `Accept` header is optional. Supported content types:
 }
 ```
 
+### GET /1.0/identifiers/did:nfd:{ADDRESS} — Reverse Resolution
+
+Resolve an Algorand address to discover all associated NFD DIDs. Uses the same endpoint as standard resolution — the resolver detects that the identifier is an Algorand address (58-character uppercase base32) rather than an NFD name.
+
+**Request:**
+```
+GET /1.0/identifiers/did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY
+```
+
+**Response (200 OK):**
+```json
+{
+  "didDocument": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://w3id.org/security/suites/ed25519-2020/v1",
+      "https://w3id.org/security/suites/x25519-2020/v1"
+    ],
+    "id": "did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY",
+    "alsoKnownAs": [
+      "did:nfd:nfdomains.algo",
+      "did:nfd:mail.nfdomains.algo"
+    ],
+    "verificationMethod": [{
+      "id": "did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY#owner",
+      "type": "Ed25519VerificationKey2020",
+      "controller": "did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY",
+      "publicKeyMultibase": "z...",
+      "blockchainAccountId": "RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY"
+    }],
+    "authentication": ["did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY#owner"],
+    "assertionMethod": ["did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY#owner"],
+    "keyAgreement": [{
+      "id": "did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY#x25519-owner",
+      "type": "X25519KeyAgreementKey2020",
+      "controller": "did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY",
+      "publicKeyMultibase": "z..."
+    }]
+  },
+  "didResolutionMetadata": {
+    "contentType": "application/did+json",
+    "retrieved": "2026-03-04T12:00:00Z",
+    "duration": 85
+  },
+  "didDocumentMetadata": {}
+}
+```
+
+**Response (200 OK) — address with no associated NFDs:**
+```json
+{
+  "didDocument": {
+    "@context": ["..."],
+    "id": "did:nfd:AAAA...YYYY",
+    "verificationMethod": [{ "..." }],
+    "authentication": ["..."],
+    "assertionMethod": ["..."],
+    "keyAgreement": [{ "..." }]
+  },
+  "didResolutionMetadata": { "..." },
+  "didDocumentMetadata": {}
+}
+```
+
+The `alsoKnownAs` field is absent when the address has no associated NFDs. The DID Document is still valid — it contains the address's Ed25519 verification method.
+
 ### GET /1.0/identifiers/{did-url} — DID URL Dereferencing
 
 Dereference a DID URL to retrieve a specific resource from the DID Document. This is triggered when the DID URL contains a fragment (`#`) or a `?service=` query parameter.
@@ -907,6 +979,9 @@ curl -s "http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo?service=we
 curl -v -H "Accept: text/uri-list" \
   "http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo?service=web"
 
+# Reverse resolution — find DIDs for an Algorand address
+curl -s http://localhost:8080/1.0/identifiers/did:nfd:RXZRFW26WYHFV44APFAK4BEMU3P54OBK47LCAZQJPXOTZ4AZPSFDAKLIQY | jq .
+
 # Health check
 curl -s http://localhost:8080/health | jq .
 
@@ -933,6 +1008,7 @@ curl http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo
 | I want to... | What to do |
 |--------------|------------|
 | Resolve my DID | `curl http://localhost:8080/1.0/identifiers/did:nfd:yourname.algo` |
+| Find DIDs for an address | `curl http://localhost:8080/1.0/identifiers/did:nfd:{ADDRESS}` |
 | Add a website service | Verify your domain (`v.domain`), or set `u.website` to `https://yoursite.com` |
 | Add my profile | Set `u.name`, `u.bio`, `u.avatar`, `u.banner` on your NFD -- `#profile` service is auto-generated |
 | Add social media links | Set `u.twitter`, `u.github`, etc. on your NFD -- SocialMedia services are auto-generated |

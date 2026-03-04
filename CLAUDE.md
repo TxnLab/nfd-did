@@ -56,7 +56,7 @@ Three-layer design with an HTTP server on top:
 - Verification method IDs: `#owner`, `#algo-0`..`#algo-N`, `#x25519-owner`
 - Public keys use multibase base58btc encoding with multicodec prefixes
 - Tests use `github.com/stretchr/testify` (assert/require)
-- The Dockerfile copies `cmd/` and `internal/` directly — image is `ghcr.io/txnlab/did-nfd-resolver`
+- The Dockerfile copies `cmd/` and `internal/` directly — image is `txnlab/did-nfd-resolver`
 
 ## Important Docs
 

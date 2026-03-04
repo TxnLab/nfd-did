@@ -22,11 +22,13 @@ import (
 
 // mockNfdFetcher implements nfd.NfdFetcher for testing.
 type mockNfdFetcher struct {
-	dnsResult map[string]nfd.Properties
-	dnsErr    error
-	didResult nfd.Properties
-	didAppID  uint64
-	didErr    error
+	dnsResult  map[string]nfd.Properties
+	dnsErr     error
+	didResult  nfd.Properties
+	didAppID   uint64
+	didErr     error
+	addressMap map[string][]string
+	addressErr error
 }
 
 func (m *mockNfdFetcher) FetchNfdDnsVals(_ context.Context, names []string) (map[string]nfd.Properties, error) {
@@ -38,6 +40,18 @@ func (m *mockNfdFetcher) FetchNfdDnsVals(_ context.Context, names []string) (map
 
 func (m *mockNfdFetcher) FetchNfdDidVals(_ context.Context, _ string) (nfd.Properties, uint64, error) {
 	return m.didResult, m.didAppID, m.didErr
+}
+
+func (m *mockNfdFetcher) FindNFDsByAddress(_ context.Context, address string) ([]string, error) {
+	if m.addressErr != nil {
+		return nil, m.addressErr
+	}
+	if m.addressMap != nil {
+		if names, ok := m.addressMap[address]; ok {
+			return names, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestParseDID(t *testing.T) {
@@ -1196,4 +1210,137 @@ func TestResolve_DepositService_Deactivated(t *testing.T) {
 	for _, svc := range result.DIDDocument.Service {
 		assert.NotEqual(t, "did:nfd:expired.algo#deposit", svc.ID, "deactivated NFD should not have #deposit service")
 	}
+}
+
+// --- Address DID (reverse resolution) tests ---
+
+func TestResolve_AddressDID_MultipleNFDs(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{
+		addressMap: map[string][]string{
+			ownerAddr: {"nfdomains.algo", "mail.nfdomains.algo"},
+		},
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.DIDDocument)
+
+	doc := result.DIDDocument
+	assert.Equal(t, "did:nfd:"+ownerAddr, doc.ID)
+	require.Len(t, doc.AlsoKnownAs, 2)
+	assert.Equal(t, "did:nfd:nfdomains.algo", doc.AlsoKnownAs[0])
+	assert.Equal(t, "did:nfd:mail.nfdomains.algo", doc.AlsoKnownAs[1])
+}
+
+func TestResolve_AddressDID_SingleNFD(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{
+		addressMap: map[string][]string{
+			ownerAddr: {"patrick.algo"},
+		},
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+
+	doc := result.DIDDocument
+	require.Len(t, doc.AlsoKnownAs, 1)
+	assert.Equal(t, "did:nfd:patrick.algo", doc.AlsoKnownAs[0])
+}
+
+func TestResolve_AddressDID_NoNFDs(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+
+	doc := result.DIDDocument
+	assert.Equal(t, "did:nfd:"+ownerAddr, doc.ID)
+	assert.Empty(t, doc.AlsoKnownAs)
+}
+
+func TestResolve_AddressDID_InvalidAddress(t *testing.T) {
+	mock := &mockNfdFetcher{}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:NOTAVALIDADDRESS")
+	require.Error(t, err)
+	assert.Equal(t, ErrorInvalidDID, result.ResolutionMetadata.Error)
+}
+
+func TestResolve_AddressDID_FetcherError(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{
+		addressErr: fmt.Errorf("network error"),
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.Error(t, err)
+	assert.Equal(t, ErrorInternalError, result.ResolutionMetadata.Error)
+}
+
+func TestResolve_AddressDID_VerificationMethod(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+	result, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+
+	doc := result.DIDDocument
+	didID := "did:nfd:" + ownerAddr
+
+	// Should have one verification method from the address
+	require.Len(t, doc.VerificationMethod, 1)
+	assert.Equal(t, didID+"#owner", doc.VerificationMethod[0].ID)
+	assert.Equal(t, KeyTypeEd25519, doc.VerificationMethod[0].Type)
+	assert.Equal(t, ownerAddr, doc.VerificationMethod[0].BlockchainAccountId)
+	assert.NotEmpty(t, doc.VerificationMethod[0].PublicKeyMultibase)
+
+	// Should have authentication and assertion
+	assert.Contains(t, doc.Authentication, didID+"#owner")
+	assert.Contains(t, doc.AssertionMethod, didID+"#owner")
+
+	// Should have X25519 key agreement
+	require.Len(t, doc.KeyAgreement, 1)
+	assert.Equal(t, didID+"#x25519-owner", doc.KeyAgreement[0].ID)
+	assert.Equal(t, KeyTypeX25519, doc.KeyAgreement[0].Type)
+
+	// Should have standard contexts
+	assert.Equal(t, DefaultContexts(), doc.Context)
+}
+
+func TestResolve_AddressDID_CacheHit(t *testing.T) {
+	ownerAddr := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY5HFKQ"
+
+	mock := &mockNfdFetcher{
+		addressMap: map[string][]string{
+			ownerAddr: {"cached.algo"},
+		},
+	}
+
+	resolver := NewNfdDIDResolverWithFetcher(mock, 5*time.Minute)
+
+	// First call
+	result1, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+
+	// Second call should hit cache
+	result2, err := resolver.Resolve(context.Background(), "did:nfd:"+ownerAddr)
+	require.NoError(t, err)
+
+	assert.Equal(t, result1.DIDDocument.ID, result2.DIDDocument.ID)
+	assert.Equal(t, result1.DIDDocument.AlsoKnownAs, result2.DIDDocument.AlsoKnownAs)
 }

@@ -33,7 +33,7 @@ curl http://localhost:8080/1.0/identifiers/did:nfd:nfdomains.algo
 ### Docker
 
 ```bash
-docker run -p 8080:8080 ghcr.io/txnlab/did-nfd-resolver:latest
+docker run -p 8080:8080 txnlab/did-nfd-resolver:latest
 ```
 
 Or build locally:

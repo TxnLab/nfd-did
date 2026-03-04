@@ -5,7 +5,7 @@
 
 services:
   driver-did-nfd:
-    image: ghcr.io/txnlab/did-nfd-resolver:latest
+    image: txnlab/did-nfd-resolver:latest
     build:
       context: ..
       dockerfile: ../Dockerfile
