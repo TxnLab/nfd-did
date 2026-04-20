@@ -6,6 +6,7 @@
 package nfd
 
 import (
+	"encoding/binary"
 	"strconv"
 	"testing"
 	"time"
@@ -417,4 +418,57 @@ func TestIsNFdExpiredWithRealTimestamps(t *testing.T) {
 
 func formatTimestamp(t int64) string {
 	return strconv.FormatInt(t, 10)
+}
+
+func TestFetchAllStateAsNFDProperties_UTF8EightByteValueStaysString(t *testing.T) {
+	// "abc\u200def" is 8 UTF-8 bytes (3 + 3 + 2) and contains a zero-width
+	// joiner (U+200D, category Cf), which fails strconv.IsPrint. Under the old
+	// heuristic this value would be silently reinterpreted as a big-endian
+	// uint64. With the whitelist fix, user-defined keys must stay strings.
+	const utf8Eight = "abc\u200def"
+	require8 := []byte(utf8Eight)
+	assert.Len(t, require8, 8, "fixture must be exactly 8 bytes")
+
+	boxData := map[string][]byte{
+		"u.bio":     []byte(utf8Eight),
+		"v.github":  []byte("deadbeef"), // 8 printable ASCII bytes
+		"u.custom8": {0x00, 'a', 'b', 'c', 'd', 'e', 'f', 'g'},
+	}
+
+	props := FetchAllStateAsNFDProperties(nil, boxData)
+
+	assert.Equal(t, utf8Eight, props.UserDefined["bio"])
+	assert.Equal(t, "deadbeef", props.Verified["github"])
+	assert.Equal(t, "\x00abcdefg", props.UserDefined["custom8"])
+}
+
+func TestFetchAllStateAsNFDProperties_InternalUint64KeysStillDecode(t *testing.T) {
+	packUint64 := func(v uint64) []byte {
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, v)
+		return buf
+	}
+
+	cases := []struct {
+		key     string
+		value   uint64
+		wantKey string
+	}{
+		{"i.timeCreated", 1700000000, "timeCreated"},
+		{"i.timeChanged", 1700000100, "timeChanged"},
+		{"i.expirationTime", 2000000000, "expirationTime"},
+		{"i.sellamt", 1_000_000, "sellamt"},
+		{"i.asaid", 12345, "asaid"},
+	}
+
+	boxData := map[string][]byte{}
+	for _, c := range cases {
+		boxData[c.key] = packUint64(c.value)
+	}
+
+	props := FetchAllStateAsNFDProperties(nil, boxData)
+
+	for _, c := range cases {
+		assert.Equal(t, strconv.FormatUint(c.value, 10), props.Internal[c.wantKey], "key %s", c.key)
+	}
 }

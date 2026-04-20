@@ -89,6 +89,13 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+// setContentTypeUTF8 writes Content-Type with an explicit UTF-8 charset.
+// All response bodies are JSON-encoded UTF-8; the charset parameter prevents
+// consumers from guessing (e.g. Latin-1) and mojibake on non-ASCII property values.
+func setContentTypeUTF8(w http.ResponseWriter, base string) {
+	w.Header().Set("Content-Type", base+"; charset=utf-8")
+}
+
 func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		didStr := r.PathValue("did")
@@ -138,12 +145,12 @@ func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 			if result != nil && result.ResolutionMetadata.Error != "" {
 				switch result.ResolutionMetadata.Error {
 				case did.ErrorNotFound:
-					w.Header().Set("Content-Type", contentType)
+					setContentTypeUTF8(w, contentType)
 					w.WriteHeader(http.StatusNotFound)
 					json.NewEncoder(w).Encode(result)
 					return
 				case did.ErrorInvalidDID:
-					w.Header().Set("Content-Type", contentType)
+					setContentTypeUTF8(w, contentType)
 					w.WriteHeader(http.StatusBadRequest)
 					json.NewEncoder(w).Encode(result)
 					return
@@ -159,7 +166,7 @@ func handleResolve(resolver did.NfdDIDResolver) http.HandlerFunc {
 			statusCode = http.StatusGone
 		}
 
-		w.Header().Set("Content-Type", contentType)
+		setContentTypeUTF8(w, contentType)
 		w.WriteHeader(statusCode)
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
@@ -173,12 +180,12 @@ func handleDereference(w http.ResponseWriter, resolver did.NfdDIDResolver, r *ht
 		if result != nil && result.DereferencingMetadata.Error != "" {
 			switch result.DereferencingMetadata.Error {
 			case did.ErrorNotFound:
-				w.Header().Set("Content-Type", contentType)
+				setContentTypeUTF8(w, contentType)
 				w.WriteHeader(http.StatusNotFound)
 				json.NewEncoder(w).Encode(result)
 				return
 			case did.ErrorInvalidDID, did.ErrorInvalidDIDURL:
-				w.Header().Set("Content-Type", contentType)
+				setContentTypeUTF8(w, contentType)
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(result)
 				return
@@ -203,7 +210,7 @@ func handleDereference(w http.ResponseWriter, resolver did.NfdDIDResolver, r *ht
 		}
 	}
 
-	w.Header().Set("Content-Type", result.DereferencingMetadata.ContentType)
+	setContentTypeUTF8(w, result.DereferencingMetadata.ContentType)
 	w.WriteHeader(http.StatusOK)
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
@@ -211,14 +218,14 @@ func handleDereference(w http.ResponseWriter, resolver did.NfdDIDResolver, r *ht
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	setContentTypeUTF8(w, "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status": "ok",
 	})
 }
 
 func handleProperties(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	setContentTypeUTF8(w, "application/json")
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.Encode(map[string]interface{}{
@@ -239,7 +246,7 @@ func handleProperties(w http.ResponseWriter, _ *http.Request) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	setContentTypeUTF8(w, "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{
 		"error": message,

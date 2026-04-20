@@ -445,15 +445,19 @@ func (a byKeyName) Less(i, j int) bool {
 	return bytes.Compare(keyI, keyJ) == -1
 }
 
+// uint64EncodedKeys enumerates the internal NFD contract state keys whose
+// values are stored as 8-byte big-endian uint64s. User-defined (u.*) and
+// verified (v.*) values are never decoded this way — an 8-byte UTF-8 string
+// containing a non-printable rune (ZWJ, BOM, format chars) must stay a string.
+var uint64EncodedKeys = map[string]struct{}{
+	"i.timeCreated":    {},
+	"i.timeChanged":    {},
+	"i.expirationTime": {},
+	"i.sellamt":        {},
+	"i.asaid":          {},
+}
+
 func FetchAllStateAsNFDProperties(appState []models.TealKeyValue, boxData map[string][]byte) Properties {
-	isStringPrintable := func(str string) bool {
-		for _, strRune := range str {
-			if !strconv.IsPrint(strRune) {
-				return false
-			}
-		}
-		return true
-	}
 	var (
 		state = Properties{
 			Internal:    map[string]string{},
@@ -484,8 +488,7 @@ func FetchAllStateAsNFDProperties(appState []models.TealKeyValue, boxData map[st
 				// 32 bytes and key name has .a [algorand address] suffix - parse accordingly - strip suffix
 				valAsStr = RawPKAsAddress(stringVal).String()
 				key = strings.TrimSuffix(key, ".a")
-			} else if len(stringVal) == 8 && !isStringPrintable(string(stringVal)) {
-				// Assume it's a big-endian integer
+			} else if _, ok := uint64EncodedKeys[key]; ok && len(stringVal) == 8 {
 				valAsStr = strconv.FormatUint(binary.BigEndian.Uint64(stringVal), 10)
 			} else {
 				valAsStr = string(stringVal)
