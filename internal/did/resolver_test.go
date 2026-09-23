@@ -22,20 +22,11 @@ import (
 
 // mockNfdFetcher implements nfd.NfdFetcher for testing.
 type mockNfdFetcher struct {
-	dnsResult  map[string]nfd.Properties
-	dnsErr     error
 	didResult  nfd.Properties
 	didAppID   uint64
 	didErr     error
 	addressMap map[string][]string
 	addressErr error
-}
-
-func (m *mockNfdFetcher) FetchNfdDnsVals(_ context.Context, names []string) (map[string]nfd.Properties, error) {
-	if m.dnsErr != nil {
-		return nil, m.dnsErr
-	}
-	return m.dnsResult, nil
 }
 
 func (m *mockNfdFetcher) FetchNfdDidVals(_ context.Context, _ string) (nfd.Properties, uint64, error) {

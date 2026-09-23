@@ -27,8 +27,6 @@ import (
 	"github.com/algorand/go-algorand-sdk/v2/crypto"
 	"github.com/algorand/go-algorand-sdk/v2/types"
 	"github.com/mailgun/holster/v4/syncutil"
-
-	"github.com/coredns/coredns/plugin/pkg/log"
 )
 
 var (
@@ -39,21 +37,15 @@ var (
 )
 
 type NfdFetcher interface {
-	FetchNfdDnsVals(ctx context.Context, names []string) (map[string]Properties, error)
 	FetchNfdDidVals(ctx context.Context, name string) (Properties, uint64, error)
 	FindNFDsByAddress(ctx context.Context, address string) ([]string, error)
 }
 type nfdFetcher struct {
 	Client     *algod.Client
 	RegistryId uint64
-	AlgoXyzIp  string
 }
 
-func newNfdFetcher(client *algod.Client, registryID uint64, algoXyzIp string) NfdFetcher {
-	return &nfdFetcher{Client: client, RegistryId: registryID, AlgoXyzIp: algoXyzIp}
-}
-
-// NewNfdFetcher creates a new NfdFetcher for use outside the DNS plugin (e.g., DID resolver).
+// NewNfdFetcher creates a new NfdFetcher for the DID resolver.
 func NewNfdFetcher(client *algod.Client, registryID uint64) NfdFetcher {
 	return &nfdFetcher{Client: client, RegistryId: registryID}
 }
@@ -62,52 +54,6 @@ type Properties struct {
 	Internal    map[string]string `json:"internal"`
 	UserDefined map[string]string `json:"userDefined"`
 	Verified    map[string]string `json:"verified"`
-}
-
-// FetchNfdDnsVals retrieves DNS and URL properties for a list of NFD names in parallel, returning a map of results.
-// It queries the NFD App ID by name and fetches specific properties for each NFD, using goroutines for efficiency.
-// If all names result in `ErrNfdNotFound`, the function returns this error; otherwise, it returns a map of found values.
-func (n *nfdFetcher) FetchNfdDnsVals(ctx context.Context, names []string) (map[string]Properties, error) {
-	var (
-		wg     syncutil.WaitGroup
-		lock   sync.Mutex
-		retMap = map[string]Properties{}
-	)
-
-	for _, name := range names {
-		wg.Run(func(val interface{}) error {
-			name := val.(string)
-			nfdId, err := n.FindNFDAppIDByName(ctx, name)
-			if err != nil {
-				return err
-			}
-			props, err := n.FetchNFD(ctx, nfdId, false, []string{"u.dns", "v.blueskydid"})
-			if err != nil {
-				return err
-			}
-
-			lock.Lock()
-			retMap[name] = props
-			lock.Unlock()
-
-			return nil
-		}, name)
-	}
-	errs := wg.Wait()
-	if errs != nil {
-		// return ErrNfdNotFound only if ALL errs are ErrNfdNotFound
-		for _, err := range errs {
-			if !errors.Is(err, ErrNfdNotFound) {
-				return nil, err
-			}
-		}
-		// all errors were not found
-		if len(errs) == len(names) {
-			return nil, ErrNfdNotFound
-		}
-		// some were found
-	}
-	return retMap, nil
 }
 
 // FetchNfdDidVals retrieves properties needed for DID document construction for a single NFD name.
@@ -154,22 +100,14 @@ func (n *nfdFetcher) FetchNFD(ctx context.Context, nfdId uint64, internalOnly bo
 	// verified won't be that long - but once v2 it'll all be in single values
 	properties.UserDefined = MergeNFDProperties(properties.UserDefined)
 
-	// If v3 and expired, or if for sale - just treat as old-school redirect to home page and that's it.
+	// Expired or for-sale NFDs get their properties ignored entirely, so only a live NFD
+	// carrying a blueskydid needs the v3 contract check.
 	shouldIgnoreProps := IsNFdExpired(properties) || !IsNfdOwned(nfdId, properties)
-	hasExplicitProps := properties.UserDefined["dns"] != "" || properties.Verified["blueskydid"] != ""
-	if !shouldIgnoreProps && hasExplicitProps {
-		// Must be v3 for dns / blueskydid support
+	if !shouldIgnoreProps && properties.Verified["blueskydid"] != "" {
+		// Must be v3 for blueskydid support
 		if !IsContractVersionAtLeast(properties.Internal["ver"], 3, 0) {
-			log.Debugf("NFD %d is v%s but w/ dns or blueskydid val, flagging incompatible", nfdId, properties.Internal["ver"])
 			return Properties{}, ErrNFdIncompatible
 		}
-	}
-	if shouldIgnoreProps || properties.UserDefined["dns"] == "" {
-		// expired, not owned, or.. doesn't have explicit dns etc records
-		// do old school url handling by composing fake DNS record so we just return A record of the name itself.
-		// ie: patrick.algo.xyz -> turns into A address of algo.xyz service (can be changed via corefile config block)
-		properties.UserDefined["dns"] = fmt.Sprintf(`[ {"name":"@","type": "a","rrData": ["%s"]} ]`, n.AlgoXyzIp)
-		return properties, nil
 	}
 
 	return properties, nil

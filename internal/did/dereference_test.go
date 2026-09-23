@@ -391,10 +391,6 @@ type countingFetcher struct {
 	count *int
 }
 
-func (c *countingFetcher) FetchNfdDnsVals(ctx context.Context, names []string) (map[string]nfd.Properties, error) {
-	return c.inner.FetchNfdDnsVals(ctx, names)
-}
-
 func (c *countingFetcher) FetchNfdDidVals(ctx context.Context, name string) (nfd.Properties, uint64, error) {
 	*c.count++
 	return c.inner.FetchNfdDidVals(ctx, name)

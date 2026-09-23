@@ -261,7 +261,6 @@ The implementation adds reverse resolution to three layers:
 **Interface change** — add to `NfdFetcher`:
 ```go
 type NfdFetcher interface {
-    FetchNfdDnsVals(ctx context.Context, names []string) (map[string]Properties, error)
     FetchNfdDidVals(ctx context.Context, name string) (Properties, uint64, error)
     FindNFDsByAddress(ctx context.Context, address string) ([]string, error)  // NEW
 }
